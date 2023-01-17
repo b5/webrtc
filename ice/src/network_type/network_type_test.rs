@@ -71,6 +71,8 @@ fn test_network_type_serialization() {
         (NetworkType::Tcp6, "\"tcp6\""),
         (NetworkType::Udp4, "\"udp4\""),
         (NetworkType::Udp6, "\"udp6\""),
+        (NetworkType::Quic4, "\"quic4\""),
+        (NetworkType::Quic6, "\"quic6\""),
         (NetworkType::Unspecified, "\"unspecified\""),
     ];
 
@@ -89,6 +91,8 @@ fn test_network_type_to_string() {
         (NetworkType::Tcp6, "tcp6"),
         (NetworkType::Udp4, "udp4"),
         (NetworkType::Udp6, "udp6"),
+        (NetworkType::Quic4, "quic4"),
+        (NetworkType::Quic6, "quic6"),
         (NetworkType::Unspecified, "unspecified"),
     ];
 

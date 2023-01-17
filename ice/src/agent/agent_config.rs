@@ -152,6 +152,8 @@ pub struct AgentConfig {
     /// Controls if self-signed certificates are accepted when connecting to TURN servers via TLS or
     /// DTLS.
     pub insecure_skip_verify: bool,
+
+    pub tls_server_config: Option<rustls::ServerConfig>,
 }
 
 impl AgentConfig {

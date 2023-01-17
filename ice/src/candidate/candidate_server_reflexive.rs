@@ -10,7 +10,6 @@ use util::sync::Mutex as SyncMutex;
 #[derive(Default)]
 pub struct CandidateServerReflexiveConfig {
     pub base_config: CandidateBaseConfig,
-
     pub rel_addr: String,
     pub rel_port: u16,
 }

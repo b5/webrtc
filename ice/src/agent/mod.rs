@@ -95,6 +95,7 @@ struct ChanReceivers {
 pub struct Agent {
     pub(crate) internal: Arc<AgentInternal>,
 
+    pub(crate) tls_server_config: Option<rustls::ServerConfig>,
     pub(crate) udp_network: UDPNetwork,
     pub(crate) interface_filter: Arc<Option<InterfaceFilterFn>>,
     pub(crate) ip_filter: Arc<Option<IpFilterFn>>,
@@ -193,6 +194,7 @@ impl Agent {
         };
 
         let agent = Self {
+            tls_server_config: config.tls_server_config,
             udp_network: config.udp_network,
             internal: Arc::new(ai),
             interface_filter: Arc::clone(&config.interface_filter),
@@ -448,6 +450,7 @@ impl Agent {
         //TODO: a.gatherCandidateCancel = cancel
 
         let params = GatherCandidatesInternalParams {
+            tls_server_config: self.tls_server_config.clone(),
             udp_network: self.udp_network.clone(),
             candidate_types: self.candidate_types.clone(),
             urls: self.urls.clone(),

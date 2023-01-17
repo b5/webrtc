@@ -5,6 +5,7 @@ use ice::agent::agent_config::AgentConfig;
 use ice::agent::Agent;
 use ice::candidate::{candidate_base::*, *};
 use ice::state::*;
+use ice::tls::{self, Keypair};
 use ice::Error;
 use ice::{network_type::*, udp_network::UDPNetwork};
 
@@ -39,7 +40,7 @@ lazy_static! {
 
 // HTTP Listener to get ICE Credentials/Candidate from remote Peer
 async fn remote_handler(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
-    //println!("received {:?}", req);
+    println!("received {:?}", req);
     match (req.method(), req.uri().path()) {
         (&Method::POST, "/remoteAuth") => {
             let full_body =
@@ -48,7 +49,7 @@ async fn remote_handler(req: Request<Body>) -> Result<Response<Body>, hyper::Err
                     Err(err) => panic!("{}", err),
                 };
             let tx = REMOTE_AUTH_CHANNEL.0.lock().await;
-            //println!("body: {:?}", full_body);
+            println!("got /remoteAuth body: {:?}", full_body);
             let _ = tx.send(full_body).await;
 
             let mut response = Response::new(Body::empty());
@@ -63,7 +64,7 @@ async fn remote_handler(req: Request<Body>) -> Result<Response<Body>, hyper::Err
                     Err(err) => panic!("{}", err),
                 };
             let tx = REMOTE_CAND_CHANNEL.0.lock().await;
-            //println!("body: {:?}", full_body);
+            println!("got remoteCandidate body: {:?}", full_body);
             let _ = tx.send(full_body).await;
 
             let mut response = Response::new(Body::empty());
@@ -188,9 +189,16 @@ async fn main() -> Result<(), Error> {
             UDPNetwork::Ephemeral(Default::default())
         };
 
+        let keypair = Keypair::generate();
+        let server_config = tls::make_server_config(&keypair).unwrap();
+
         let ice_agent = Arc::new(
             Agent::new(AgentConfig {
-                network_types: vec![NetworkType::Udp4],
+                // urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+                urls: vec![ice::url::Url::parse_url("stun:stun.l.google.com:19302").unwrap()],
+                // network_types: vec![NetworkType::Udp6, NetworkType::Udp4],
+                network_types: vec![NetworkType::Quic4, NetworkType::Quic6],
+                tls_server_config: Some(server_config),
                 udp_network,
                 ..Default::default()
             })
@@ -329,7 +337,7 @@ async fn main() -> Result<(), Error> {
 
                 let val: String = (0..15)
                     .map(|_| {
-                        let idx = thread_rng().gen_range(0..RANDOM_STRING.len());
+                        let idx = thread_rng().gen_range(0, RANDOM_STRING.len());
                         RANDOM_STRING[idx] as char
                     })
                     .collect();

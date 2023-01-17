@@ -22,7 +22,7 @@ arc-swap = "1.5"
 async-trait = "0.1.56"
 crc = "3.0"
 log = "0.4.16"
-rand = "0.8.5"
+rand = "0.7.0"
 serde = { version = "1.0.102", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
@@ -30,6 +30,15 @@ tokio = { version = "1.19", features = ["full"] }
 url = "2.2"
 uuid = { version = "1.1", features = ["v4"] }
 waitgroup = "0.1.2"
+s2n-quic = "1.15.0"
+rustls = { version = "0.20.8", features = ["dangerous_configuration"] }
+webpki = "0.22.0"
+ed25519-dalek = "1.0.1"
+x509-parser = "0.14.0"
+der = { version = "0.6.1", features = ["alloc", "derive"] }
+ring = "0.16.20"
+rcgen = "0.10.0"
+hex = "0.4.3"
 
 [dev-dependencies]
 tokio-test = "0.4.0" # must match the min version of the `tokio` crate above

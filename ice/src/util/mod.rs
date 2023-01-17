@@ -166,3 +166,48 @@ pub async fn listen_udp_in_port_range(
 
     Err(Error::ErrPort)
 }
+
+pub async fn listen_quic_in_port_range(
+    vnet: &Arc<Net>,
+    port_max: u16,
+    port_min: u16,
+    laddr: SocketAddr,
+    tls_config: rustls::ServerConfig,
+    server: bool,
+) -> Result<Arc<dyn Conn + Send + Sync>> {
+    if laddr.port() != 0 || (port_min == 0 && port_max == 0) {
+        return Ok(vnet.bind(laddr).await?);
+    }
+    let i = if port_min == 0 { 1 } else { port_min };
+    let j = if port_max == 0 { 0xFFFF } else { port_max };
+    if i > j {
+        return Err(Error::ErrPort);
+    }
+
+    let port_start = rand::random::<u16>() % (j - i + 1) + i;
+    let mut port_current = port_start;
+    loop {
+        let limits = s2n_quic::provider::limits::Default::default();
+        let laddr = SocketAddr::new(laddr.ip(), port_current);
+
+        s2n_quic::Server::builder()
+            .with_tls(tls_server_config)
+            .with_io()
+
+        match vnet.bind(laddr).await {
+            Ok(c) => return Ok(c),
+            Err(err) => log::debug!("failed to listen {}: {}", laddr, err),
+        };
+            
+
+        port_current += 1;
+        if port_current > j {
+            port_current = i;
+        }
+        if port_current == port_start {
+            break;
+        }
+    }
+
+    Err(Error::ErrPort)
+}

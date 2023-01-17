@@ -20,6 +20,7 @@ use waitgroup::WaitGroup;
 const STUN_GATHER_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct GatherCandidatesInternalParams {
+    pub(crate) tls_server_config: Option<rustls::ServerConfig>,
     pub(crate) udp_network: UDPNetwork,
     pub(crate) candidate_types: Vec<CandidateType>,
     pub(crate) urls: Vec<Url>,
@@ -36,6 +37,7 @@ pub(crate) struct GatherCandidatesInternalParams {
 }
 
 struct GatherCandidatesLocalParams {
+    tls_server_config: Option<rustls::ServerConfig>,
     udp_network: UDPNetwork,
     network_types: Vec<NetworkType>,
     mdns_mode: MulticastDnsMode,
@@ -48,6 +50,7 @@ struct GatherCandidatesLocalParams {
 }
 
 struct GatherCandidatesLocalUDPMuxParams {
+    tls_server_config: Option<rustls::ServerConfig>,
     network_types: Vec<NetworkType>,
     interface_filter: Arc<Option<InterfaceFilterFn>>,
     ip_filter: Arc<Option<IpFilterFn>>,
@@ -58,6 +61,7 @@ struct GatherCandidatesLocalUDPMuxParams {
 }
 
 struct GatherCandidatesSrflxMappedParasm {
+    tls_server_config: Option<rustls::ServerConfig>,
     network_types: Vec<NetworkType>,
     port_max: u16,
     port_min: u16,
@@ -67,6 +71,7 @@ struct GatherCandidatesSrflxMappedParasm {
 }
 
 struct GatherCandidatesSrflxParams {
+    tls_server_config: Option<rustls::ServerConfig>,
     urls: Vec<Url>,
     network_types: Vec<NetworkType>,
     port_max: u16,
@@ -90,6 +95,7 @@ impl Agent {
             match t {
                 CandidateType::Host => {
                     let local_params = GatherCandidatesLocalParams {
+                        tls_server_config: params.tls_server_config.clone(),
                         udp_network: params.udp_network.clone(),
                         network_types: params.network_types.clone(),
                         mdns_mode: params.mdns_mode,
@@ -116,6 +122,7 @@ impl Agent {
                     };
 
                     let srflx_params = GatherCandidatesSrflxParams {
+                        tls_server_config: params.tls_server_config.clone(),
                         urls: params.urls.clone(),
                         network_types: params.network_types.clone(),
                         port_max: ephemeral_config.port_max(),
@@ -132,6 +139,7 @@ impl Agent {
                     if let Some(ext_ip_mapper) = &*params.ext_ip_mapper {
                         if ext_ip_mapper.candidate_type == CandidateType::ServerReflexive {
                             let srflx_mapped_params = GatherCandidatesSrflxMappedParasm {
+                                tls_server_config: params.tls_server_config.clone(),
                                 network_types: params.network_types.clone(),
                                 port_max: ephemeral_config.port_max(),
                                 port_min: ephemeral_config.port_min(),
@@ -193,6 +201,7 @@ impl Agent {
 
     async fn gather_candidates_local(params: GatherCandidatesLocalParams) {
         let GatherCandidatesLocalParams {
+            tls_server_config,
             udp_network,
             network_types,
             mdns_mode,
@@ -208,6 +217,7 @@ impl Agent {
         // FIXME: We still need to support TCP in combination with this option
         if let UDPNetwork::Muxed(udp_mux) = udp_network {
             let result = Self::gather_candidates_local_udp_mux(GatherCandidatesLocalUDPMuxParams {
+                tls_server_config,
                 network_types,
                 interface_filter,
                 ip_filter,
@@ -372,6 +382,7 @@ impl Agent {
         params: GatherCandidatesLocalUDPMuxParams,
     ) -> Result<()> {
         let GatherCandidatesLocalUDPMuxParams {
+            tls_server_config: _,
             network_types,
             interface_filter,
             ip_filter,
@@ -451,6 +462,7 @@ impl Agent {
 
     async fn gather_candidates_srflx_mapped(params: GatherCandidatesSrflxMappedParasm) {
         let GatherCandidatesSrflxMappedParasm {
+            tls_server_config,
             network_types,
             port_max,
             port_min,
@@ -465,112 +477,237 @@ impl Agent {
             if network_type.is_tcp() {
                 continue;
             }
-
-            let network = network_type.to_string();
-            let net2 = Arc::clone(&net);
-            let agent_internal2 = Arc::clone(&agent_internal);
-            let ext_ip_mapper2 = Arc::clone(&ext_ip_mapper);
-
-            let w = wg.worker();
-            tokio::spawn(async move {
-                let _d = w;
-
-                let conn: Arc<dyn Conn + Send + Sync> = match listen_udp_in_port_range(
-                    &net2,
-                    port_max,
-                    port_min,
-                    if network_type.is_ipv4() {
-                        SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0)
-                    } else {
-                        SocketAddr::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(), 0)
-                    },
-                )
-                .await
-                {
-                    Ok(conn) => conn,
-                    Err(err) => {
-                        log::warn!(
-                            "[{}]: Failed to listen {}: {}",
-                            agent_internal2.get_name(),
-                            network,
-                            err
-                        );
-                        return Ok(());
+            match network_type {
+                NetworkType::Tcp4 | NetworkType::Tcp6 => {
+                    continue;
+                }
+                NetworkType::Quic4 | NetworkType::Quic6 => {
+                    if tls_server_config.is_none() {
+                        log::warn!("cannot dial quic network type, missing tls configuration");
+                        continue;
                     }
-                };
+                    let tls_server_config = tls_server_config.unwrap();
+                    let network = network_type.to_string();
+                    let net2 = Arc::clone(&net);
+                    let agent_internal2 = Arc::clone(&agent_internal);
+                    let ext_ip_mapper2 = Arc::clone(&ext_ip_mapper);
 
-                let laddr = conn.local_addr()?;
-                let mapped_ip = {
-                    if let Some(ext_ip_mapper3) = &*ext_ip_mapper2 {
-                        match ext_ip_mapper3.find_external_ip(&laddr.ip().to_string()) {
-                            Ok(ip) => ip,
+                    let w = wg.worker();
+                    tokio::spawn(async move {
+                        let _d = w;
+
+                        let conn: Arc<dyn Conn + Send + Sync> = match listen_quic_in_port_range(
+                            &net2,
+                            port_max,
+                            port_min,
+                            if network_type.is_ipv4() {
+                                SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0)
+                            } else {
+                                SocketAddr::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(), 0)
+                            },
+                            tls_server_config,
+                            agent_internal2.is_controlling,
+                        )
+                        .await
+                        {
+                            Ok(conn) => conn,
                             Err(err) => {
                                 log::warn!(
-                                    "[{}]: 1:1 NAT mapping is enabled but no external IP is found for {}: {}",
+                                    "[{}]: Failed to listen {}: {}",
                                     agent_internal2.get_name(),
-                                    laddr,
+                                    network,
                                     err
                                 );
                                 return Ok(());
                             }
-                        }
-                    } else {
-                        log::error!(
-                            "[{}]: ext_ip_mapper is None in gather_candidates_srflx_mapped",
-                            agent_internal2.get_name(),
-                        );
-                        return Ok(());
-                    }
-                };
+                        };
 
-                let srflx_config = CandidateServerReflexiveConfig {
-                    base_config: CandidateBaseConfig {
-                        network: network.clone(),
-                        address: mapped_ip.to_string(),
-                        port: laddr.port(),
-                        component: COMPONENT_RTP,
-                        conn: Some(conn),
-                        ..CandidateBaseConfig::default()
-                    },
-                    rel_addr: laddr.ip().to_string(),
-                    rel_port: laddr.port(),
-                };
+                        let laddr = conn.local_addr()?;
+                        let mapped_ip = {
+                            if let Some(ext_ip_mapper3) = &*ext_ip_mapper2 {
+                                match ext_ip_mapper3.find_external_ip(&laddr.ip().to_string()) {
+                                    Ok(ip) => ip,
+                                    Err(err) => {
+                                        log::warn!(
+                                            "[{}]: 1:1 NAT mapping is enabled but no external IP is found for {}: {}",
+                                            agent_internal2.get_name(),
+                                            laddr,
+                                            err
+                                        );
+                                        return Ok(());
+                                    }
+                                }
+                            } else {
+                                log::error!(
+                                    "[{}]: ext_ip_mapper is None in gather_candidates_srflx_mapped",
+                                    agent_internal2.get_name(),
+                                );
+                                return Ok(());
+                            }
+                        };
 
-                let candidate: Arc<dyn Candidate + Send + Sync> =
-                    match srflx_config.new_candidate_server_reflexive() {
-                        Ok(candidate) => Arc::new(candidate),
-                        Err(err) => {
-                            log::warn!(
-                                "[{}]: Failed to create server reflexive candidate: {} {} {}: {}",
-                                agent_internal2.get_name(),
-                                network,
-                                mapped_ip,
-                                laddr.port(),
-                                err
-                            );
-                            return Ok(());
-                        }
-                    };
+                        let srflx_config = CandidateServerReflexiveConfig {
+                            base_config: CandidateBaseConfig {
+                                network: network.clone(),
+                                address: mapped_ip.to_string(),
+                                port: laddr.port(),
+                                component: COMPONENT_RTP,
+                                conn: Some(conn),
+                                ..CandidateBaseConfig::default()
+                            },
+                            rel_addr: laddr.ip().to_string(),
+                            rel_port: laddr.port(),
+                        };
 
-                {
-                    if let Err(err) = agent_internal2.add_candidate(&candidate).await {
-                        if let Err(close_err) = candidate.close().await {
-                            log::warn!(
-                                "[{}]: Failed to close candidate: {}",
-                                agent_internal2.get_name(),
-                                close_err
-                            );
+                        let candidate: Arc<dyn Candidate + Send + Sync> = match srflx_config
+                            .new_candidate_server_reflexive()
+                        {
+                            Ok(candidate) => Arc::new(candidate),
+                            Err(err) => {
+                                log::warn!(
+                                        "[{}]: Failed to create server reflexive candidate: {} {} {}: {}",
+                                        agent_internal2.get_name(),
+                                        network,
+                                        mapped_ip,
+                                        laddr.port(),
+                                        err
+                                    );
+                                return Ok(());
+                            }
+                        };
+
+                        {
+                            if let Err(err) = agent_internal2.add_candidate(&candidate).await {
+                                if let Err(close_err) = candidate.close().await {
+                                    log::warn!(
+                                        "[{}]: Failed to close candidate: {}",
+                                        agent_internal2.get_name(),
+                                        close_err
+                                    );
+                                }
+                                log::warn!(
+                                    "[{}]: Failed to append to localCandidates and run onCandidateHdlr: {}",
+                                    agent_internal2.get_name(),
+                                    err
+                                );
+                            }
                         }
-                        log::warn!(
-                            "[{}]: Failed to append to localCandidates and run onCandidateHdlr: {}",
-                            agent_internal2.get_name(),
-                            err
-                        );
-                    }
+
+                        Result::<()>::Ok(())
+                    });
                 }
+                NetworkType::Udp4 | NetworkType::Udp6 => {
+                    let network = network_type.to_string();
+                    let net2 = Arc::clone(&net);
+                    let agent_internal2 = Arc::clone(&agent_internal);
+                    let ext_ip_mapper2 = Arc::clone(&ext_ip_mapper);
 
-                Result::<()>::Ok(())
-            });
+                    let w = wg.worker();
+                    tokio::spawn(async move {
+                        let _d = w;
+
+                        let conn: Arc<dyn Conn + Send + Sync> = match listen_udp_in_port_range(
+                            &net2,
+                            port_max,
+                            port_min,
+                            if network_type.is_ipv4() {
+                                SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0)
+                            } else {
+                                SocketAddr::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0).into(), 0)
+                            },
+                        )
+                        .await
+                        {
+                            Ok(conn) => conn,
+                            Err(err) => {
+                                log::warn!(
+                                    "[{}]: Failed to listen {}: {}",
+                                    agent_internal2.get_name(),
+                                    network,
+                                    err
+                                );
+                                return Ok(());
+                            }
+                        };
+
+                        let laddr = conn.local_addr()?;
+                        let mapped_ip = {
+                            if let Some(ext_ip_mapper3) = &*ext_ip_mapper2 {
+                                match ext_ip_mapper3.find_external_ip(&laddr.ip().to_string()) {
+                                    Ok(ip) => ip,
+                                    Err(err) => {
+                                        log::warn!(
+                                            "[{}]: 1:1 NAT mapping is enabled but no external IP is found for {}: {}",
+                                            agent_internal2.get_name(),
+                                            laddr,
+                                            err
+                                        );
+                                        return Ok(());
+                                    }
+                                }
+                            } else {
+                                log::error!(
+                                    "[{}]: ext_ip_mapper is None in gather_candidates_srflx_mapped",
+                                    agent_internal2.get_name(),
+                                );
+                                return Ok(());
+                            }
+                        };
+
+                        let srflx_config = CandidateServerReflexiveConfig {
+                            base_config: CandidateBaseConfig {
+                                network: network.clone(),
+                                address: mapped_ip.to_string(),
+                                port: laddr.port(),
+                                component: COMPONENT_RTP,
+                                conn: Some(conn),
+                                ..CandidateBaseConfig::default()
+                            },
+                            rel_addr: laddr.ip().to_string(),
+                            rel_port: laddr.port(),
+                        };
+
+                        let candidate: Arc<dyn Candidate + Send + Sync> = match srflx_config
+                            .new_candidate_server_reflexive()
+                        {
+                            Ok(candidate) => Arc::new(candidate),
+                            Err(err) => {
+                                log::warn!(
+                                        "[{}]: Failed to create server reflexive candidate: {} {} {}: {}",
+                                        agent_internal2.get_name(),
+                                        network,
+                                        mapped_ip,
+                                        laddr.port(),
+                                        err
+                                    );
+                                return Ok(());
+                            }
+                        };
+
+                        {
+                            if let Err(err) = agent_internal2.add_candidate(&candidate).await {
+                                if let Err(close_err) = candidate.close().await {
+                                    log::warn!(
+                                        "[{}]: Failed to close candidate: {}",
+                                        agent_internal2.get_name(),
+                                        close_err
+                                    );
+                                }
+                                log::warn!(
+                                    "[{}]: Failed to append to localCandidates and run onCandidateHdlr: {}",
+                                    agent_internal2.get_name(),
+                                    err
+                                );
+                            }
+                        }
+
+                        Result::<()>::Ok(())
+                    });
+                }
+                NetworkType::Unspecified => {
+                    continue;
+                }
+            }
         }
 
         wg.wait().await;
@@ -578,6 +715,7 @@ impl Agent {
 
     async fn gather_candidates_srflx(params: GatherCandidatesSrflxParams) {
         let GatherCandidatesSrflxParams {
+            tls_server_config,
             urls,
             network_types,
             port_max,

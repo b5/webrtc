@@ -16,7 +16,7 @@ pub fn generate_crypto_random_string(n: usize, runes: &[u8]) -> String {
 
     let rand_string: String = (0..n)
         .map(|_| {
-            let idx = rng.gen_range(0..runes.len());
+            let idx = rng.gen_range(0, runes.len());
             runes[idx] as char
         })
         .collect();
